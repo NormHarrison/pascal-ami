@@ -7,6 +7,8 @@ Uses
   Sockets, SysUtils;
 
 Type
+  TStringArray = array of string;
+
   TAMIPassport = record
     AMI_Addr: string;
     AMI_Port: integer;
@@ -21,18 +23,46 @@ Type
 { Returns a new socket connected to AMI at the location specified in the
   Passport record. This socket is then passed to all AMI actions below }
 
+
+Procedure AMISendAction(var AMI_sock: longint; const Fields: TStringArray);
+
 Function AMILogin(var Passport: TAMIPassport): longint;
 
-//Procedure AMIHangup(AMI_sock, Channel: string);
+Procedure AMIHangup(var AMI_sock: longint; Channel: string);
 
 
 
 
 Implementation
 
-Const
-  LF = #10;
-  CR = #13;
+
+Procedure AMISendAction(var AMI_sock: longint; const Fields: TStringArray);
+
+Var 
+  LE: string = #13 + #10;
+  Msg:         string = '';
+  Field_count: integer = 0;
+
+begin
+  If Length(Fields) mod 2 <> 0 then
+  begin
+    WriteLn('The fields array must contain an even number of elements');
+    Exit();
+  end;
+
+  repeat
+    Msg := Msg + Fields[Field_count * 2] + ':' + ' ' + Fields[Field_count * 2 + 1] + LE;
+
+    If Field_count = ((Length(Fields) Div 2) - 1) then
+      Msg := Msg + LE;
+
+    Inc(Field_count);
+  until Field_count = (Length(Fields) Div 2);
+
+  Write(Msg);
+  fpSend(AMI_sock, @Msg + $1, Length(Msg), 0);
+end;
+
 
 
 Function AMILogin(var Passport: TAMIPassport): longint;
@@ -75,14 +105,26 @@ begin
     Halt(1);
   end;
 
-  Sock2Text(AMI_sock, Conn_in, Conn_out);  
+  AMISendAction(AMI_sock,
+    ['Action',  'Login',
+     'Username', Passport.AMI_Username,
+     'Secret',   Passport.AMI_Secret]);
 
-  Write(Conn_out, 'Action: Login' + CR + LF,
-  'Username: ' + Passport.AMI_Username + CR + LF,
-  'Secret: ' + Passport.AMI_Secret + CR + LF);
-  Write(Conn_out, CR + LF);
+  AMILogin := AMI_sock;
+end;
 
-{
+
+
+Procedure AMIHangup(var AMI_sock: longint; Channel: string);
+
+Var
+  Conn_in,
+  Conn_out:  text;
+  Text_line: string;
+
+begin
+  Sock2Text(AMI_sock, Conn_in, Conn_out);
+
   repeat
     ReadLn(Conn_in, Text_line);
     WriteLn(Text_line);
@@ -90,11 +132,6 @@ begin
 
   Close(Conn_out);
   Close(Conn_in);
-  CloseSocket(AMI_sock);
-}
 end;
-
-
-
 
 End.
