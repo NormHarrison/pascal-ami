@@ -23,10 +23,12 @@ Begin
     AMI_Secret   := 'ThisIsNotAHardPassword!';
   end;
 
-  WriteLn('Channel name: ', ParamStr(1));
+  //WriteLn('Channel name: ', ParamStr(1));
 
   AMI_sock := AMILogin(AMI_Passport);
-  AMISendAction(AMI_sock, ['Action', 'Hangup', 'Channel', ParamStr(1)]);
-  Sleep(500);
+
+  AMISendAction(AMI_sock,
+  ['Action', 'Hangup',
+   'Channel', ParamStr(1)]);
 
 End.

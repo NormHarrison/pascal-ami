@@ -7,7 +7,12 @@ Uses
   Sockets, SysUtils;
 
 Type
+  { Generic dynamic array of short strings }
+
   TStringArray = array of string;
+
+  { A record to be filled with the AMI server's details,
+    used for location information and authentication }
 
   TAMIPassport = record
     AMI_Addr: string;
@@ -17,31 +22,34 @@ Type
   end;
 
 
-{======================================================================================}
-
-
-{ Returns a new socket connected to AMI at the location specified in the
-  Passport record. This socket is then passed to all AMI actions below }
-
+{ A generic procedure for sending any AMI action based on the provided fields }
 
 Procedure AMISendAction(var AMI_sock: longint; const Fields: TStringArray);
 
+
+{ Returns a new socket connected to AMI at the location specified in the
+  Passport record. This socket can then be passed to any future call to
+  AMISendAction() for as long as the authtimeout setting in manager.conf
+  allows (a default of 30 seconds) }
+
 Function AMILogin(var Passport: TAMIPassport): longint;
 
-Procedure AMIHangup(var AMI_sock: longint; Channel: string);
 
-
+{=======================================================================================}
 
 
 Implementation
 
-
 Procedure AMISendAction(var AMI_sock: longint; const Fields: TStringArray);
 
 Var 
-  LE: string = #13 + #10;
-  Msg:         string = '';
-  Field_count: integer = 0;
+  CRLF:              string = #13 + #10;
+  Action:            string = '';
+  Response:          string = '';
+  Line:              string = '';
+  Part:              Char;
+  Field_count:       integer = 0;
+  Response_complete: boolean;
 
 begin
   If Length(Fields) mod 2 <> 0 then
@@ -51,16 +59,31 @@ begin
   end;
 
   repeat
-    Msg := Msg + Fields[Field_count * 2] + ':' + ' ' + Fields[Field_count * 2 + 1] + LE;
-
-    If Field_count = ((Length(Fields) Div 2) - 1) then
-      Msg := Msg + LE;
+    Action := Action + Fields[Field_count * 2] + ':' + ' ' + Fields[Field_count * 2 + 1] + CRLF;
 
     Inc(Field_count);
-  until Field_count = (Length(Fields) Div 2);
 
-  Write(Msg);
-  fpSend(AMI_sock, @Msg + $1, Length(Msg), 0);
+    If Field_count = (Length(Fields) Div 2) then
+      Action := Action + CRLF;
+
+  until Field_count = (Length(Fields) Div 2);
+  fpSend(AMI_sock, @Action + $1, Length(Action), 0);
+
+  Sleep(100);
+
+{
+  repeat
+    Line := '';
+    repeat
+      fpRecv(AMI_sock, @Part, SizeOf(Part), 0);
+      Line := Line + Part;
+    until Pos(CRLF, Line) <> 0;
+
+    Response := Response + Line;
+    Write(Line);
+  until false;
+}
+  //WriteLn(Response);
 end;
 
 
@@ -71,9 +94,6 @@ Var
   AMI_sock:    longint;
   Bind_info,
   Remote_info: TSockAddr;
-  Conn_in,
-  Conn_out:    Text;
-  Text_line:   string;
 
 begin
   AMI_sock := fpSocket(AF_INET, SOCK_STREAM, IPPROTO_IP);
@@ -88,7 +108,7 @@ begin
   If fpBind(AMI_sock, @Bind_info, SizeOf(Bind_info)) = -1 then
   begin
     WriteLn('Failed to bind local socket');
-    Halt(1);
+    Exit(-1);
   end;
 
   with Passport, Remote_info do
@@ -102,36 +122,15 @@ begin
   begin;
     WriteLn(Format('The AMI server located at "%s:%d" could not be reached',
     [Passport.AMI_Addr, Passport.AMI_Port]));
-    Halt(1);
+    Exit(-1);
   end;
 
   AMISendAction(AMI_sock,
-    ['Action',  'Login',
-     'Username', Passport.AMI_Username,
-     'Secret',   Passport.AMI_Secret]);
+  ['Action',  'Login',
+   'Username', Passport.AMI_Username,
+   'Secret',   Passport.AMI_Secret]);
 
   AMILogin := AMI_sock;
-end;
-
-
-
-Procedure AMIHangup(var AMI_sock: longint; Channel: string);
-
-Var
-  Conn_in,
-  Conn_out:  text;
-  Text_line: string;
-
-begin
-  Sock2Text(AMI_sock, Conn_in, Conn_out);
-
-  repeat
-    ReadLn(Conn_in, Text_line);
-    WriteLn(Text_line);
-  until Text_line = '';
-
-  Close(Conn_out);
-  Close(Conn_in);
 end;
 
 End.
