@@ -29,8 +29,7 @@ Procedure AMISendAction(var AMI_sock: longint; const Fields: TStringArray);
 
 { Returns a new socket connected to AMI at the location specified in the
   Passport record. This socket can then be passed to any future call to
-  AMISendAction() for as long as the authtimeout setting in manager.conf
-  allows (a default of 30 seconds) }
+  AMISendAction() for the life of the program(?) }
 
 Function AMILogin(var Passport: TAMIPassport): longint;
 
@@ -44,8 +43,8 @@ Procedure AMISendAction(var AMI_sock: longint; const Fields: TStringArray);
 
 Var 
   CRLF:              string = #13 + #10;
-  Action:            string = '';
-  Response:          string = '';
+  Action:            ansistring = '';
+  Response:          ansistring = '';
   Line:              string = '';
   Part:              Char;
   Field_count:       integer = 0;
@@ -55,6 +54,7 @@ begin
   If Length(Fields) mod 2 <> 0 then
   begin
     WriteLn('The fields array must contain an even number of elements');
+    CloseSocket(AMI_sock);
     Exit();
   end;
 
@@ -67,9 +67,11 @@ begin
       Action := Action + CRLF;
 
   until Field_count = (Length(Fields) Div 2);
-  fpSend(AMI_sock, @Action + $1, Length(Action), 0);
+  fpSend(AMI_sock, Pointer(Action), Length(Action), 0);
 
-  Sleep(100);
+  Sleep(50);
+
+  If Fields[1] <> 'Login' then CloseSocket(AMI_sock);
 
 {
   repeat
