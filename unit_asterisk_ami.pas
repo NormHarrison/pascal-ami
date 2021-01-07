@@ -4,27 +4,38 @@ Unit Unit_Asterisk_AMI;
 Interface
 
 Uses
-  Sockets, SysUtils;
+  fgl, Sockets, SysUtils;
 
 Type
   { Generic dynamic array of short strings }
-
   TStringArray = array of string;
+
+  { Maps event field names to their values }
+  TEventFieldMap = specialize TFPGMap<string, string>;
+
+  TAMIEvent = record
+    Name:      string;
+    Privilege: TStringArray;
+    Fields:    TEventFieldMap;
+  end;
+
+  // Try to find an explanation about defining routine types (these are not called interfaces or prototypes)
+  TAMIEventCallback = procedure(var Event: TAMIEvent);
 
   { A record to be filled with the AMI server's details,
     used for location information and authentication }
-
   TAMIPassport = record
-    AMI_Addr: string;
-    AMI_Port: integer;
-    AMI_Username,
-    AMI_Secret: string;
+    Addr:           string;
+    Port:           integer;
+    Username:       string;
+    Secret:         string;
+    Event_callback: TAMIEventCallback;
   end;
 
 
 { A generic procedure for sending any AMI action based on the provided fields }
 
-Procedure AMISendAction(var AMI_sock: longint; const Fields: TStringArray);
+Procedure AMISendAction(var AMI_sock: PtrUInt; const Fields: TStringArray);
 
 
 { Returns a new socket connected to AMI at the location specified in the
@@ -39,11 +50,54 @@ Function AMILogin(var Passport: TAMIPassport): longint;
 
 Implementation
 
-Procedure AMISendAction(var AMI_sock: longint; const Fields: TStringArray);
+Uses
+  CThreads;
+
+Const
+  CRLF: string = #13 + #10;
+
+Var
+  Socket_mutex: TRTLCriticalSection;
+
+
+
+Function WaitForEvents(PAMI_sock: pointer): PtrInt;
+
+var
+  AMI_sock:  PtrUInt;
+
+  Part:      Char;
+  Raw_event: Ansistring;
+  Event:     TAMIEvent;
+
+begin
+  AMI_sock := PtrUInt(PAMI_sock);
+
+  // Start indefinite loop, thread never ends/returns
+  While true do
+
+    Raw_event := '';
+
+    EnterCriticalSection(Socket_mutex);
+    Try
+      Repeat
+        fpRecv(AMI_sock, @Part , 1);  // We can't over-estimate the number of bytes to receive as events are strung together and we need to separate them manually
+        Raw_event := Raw_event + Part;
+        { break when the last 4 characters of Raw_event are #13#10#13#10, we can only check for this once Raw_event has a length or 4 or larger }
+      Until false;
+    Finally
+      LeaveCriticalSection(Socket_mutex);
+    end;
+
+  end;
+end;
+
+
+
+Procedure AMISendAction(var AMI_sock: PtrUInt; const Fields: TStringArray);
 
 Var 
-  CRLF:              string = #13 + #10;
-  Action:            ansistring = '';
+  Action:            ansistring = '';  // Look into using Default()
   Response:          ansistring = '';
   Line:              string = '';
   Part:              Char;
@@ -67,11 +121,18 @@ begin
       Action := Action + CRLF;
 
   until Field_count = (Length(Fields) Div 2);
-  fpSend(AMI_sock, Pointer(Action), Length(Action), 0);
 
-  Sleep(50);
 
-  If Fields[1] <> 'Login' then CloseSocket(AMI_sock);
+  EnterCriticalSection(Socket_mutex);
+  Try
+    fpSend(AMI_sock, Pointer(Action), Length(Action), 0);
+  Finally
+    LeaveCriticalSection(Socket_mutex);
+  end;
+
+  //Sleep(50);  If the socket remains open in the event listening thread, then maybe this isn't needed
+
+  //If Fields[1] <> 'Login' then CloseSocket(AMI_sock);
 
 {
   repeat
@@ -90,11 +151,11 @@ end;
 
 
 
-Function AMILogin(var Passport: TAMIPassport): longint;
+Function AMILogin(var Passport: TAMIPassport): longint;  // We shouldn't need critical sections in the login procedure
 
 Var
-  AMI_sock:    longint;
-  Bind_info,
+  AMI_sock:    PtrUInt;
+  Bind_info:   TSockAddr;
   Remote_info: TSockAddr;
 
 begin
@@ -116,23 +177,39 @@ begin
   with Passport, Remote_info do
   begin
     sin_family := AF_INET;
-    sin_addr   := StrToNetAddr(AMI_Addr);
-    sin_port   := HtoNs(AMI_Port);
+    sin_addr   := StrToNetAddr(Addr);
+    sin_port   := HtoNs(Port);
   end;
 
   If fpConnect(AMI_sock, @Remote_info, SizeOf(Remote_info)) = -1 then
   begin;
     WriteLn(Format('The AMI server located at "%s:%d" could not be reached',
-    [Passport.AMI_Addr, Passport.AMI_Port]));
+    [Passport.Addr, Passport.Port]));
     Exit(-1);
   end;
 
   AMISendAction(AMI_sock,
   ['Action',  'Login',
-   'Username', Passport.AMI_Username,
-   'Secret',   Passport.AMI_Secret]);
+   'Username', Passport.Username,
+   'Secret',   Passport.Secret]);
+
+  { Start listening for events in a new thread }
+  BeginThread(@WaitForEvents, pointer(AMI_sock));
 
   AMILogin := AMI_sock;
 end;
+
+
+
+Initialization
+  InitCriticalSection(Socket_mutex);
+
+
+
+Finalization
+  { If the program is quit via external operating system
+    means or raises an exception, this won't be called }
+  DoneCriticalSection(Socket_mutex);
+
 
 End.
